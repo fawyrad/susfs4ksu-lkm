@@ -1,0 +1,15 @@
+SUSFS Samsung eight-KMI loader package
+
+Wrapper scripts and read-only probe are derived from:
+https://github.com/matsuzaka-yuki/susfs-lkm-module
+Commit: 170c672ebff5a35ea30a7bee3949cc67a96c9710
+License: GPL-2.0-only. Original SPDX notices retained.
+Changes: strict Android/KMI selection without tagless fallback, Samsung display
+metadata, and packaging current-run binaries instead of upstream release downloads.
+
+The kernel module is based on the pinned inforcqb/susfs4ksu-lkm source plus
+the Samsung kernel/lsm_hook.c adaptation. tools/susfs_insmod.c retains the
+official kernel-record-only symbol matcher in samsung@39cb676, with an inline
+character table replacing static-PIE pointers in failed-load diagnostics.
+Their original copyright and license notices are preserved in the complete
+matching source archive. See provenance.json for exact commits and hashes.

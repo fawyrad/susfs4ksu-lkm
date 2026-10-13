@@ -1,0 +1,6 @@
+id=susfs_lkm_loader
+name=Samsung SUSFS LKM Loader (8 KMI)
+version=v2.3.0-r18.1-samsung-patcher1
+versionCode=8
+author=inforcqb; wrapper by matsuzaka-yuki; Samsung adaptation contributors
+description=KernelSU loader for this build's eight ARM64 Samsung-adapted SUSFS modules. Exact Android/KMI selection, no rule management. Reboot required.

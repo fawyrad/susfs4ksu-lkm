@@ -1,0 +1,19 @@
+# BEGIN SAMSUNG PATCHER 1
+.gitattributes text eol=lf
+SAMSUNG_BUILD.txt text eol=lf
+SAMSUNG_PATCH_STATE.json text eol=lf
+kernel/sus_path.c -text
+kernel/lsm_hook.c text eol=lf
+tools/susfs_insmod.c text eol=lf
+tools/build-samsung.sh text eol=lf
+tools/verify-samsung.py text eol=lf
+tools/package-samsung-ksu.py text eol=lf
+tools/susfs_probe.c text eol=lf
+tools/verify-freestanding-loader.py text eol=lf
+.github/workflows/build-samsung.yml text eol=lf
+ksu-module/* text eol=lf
+tests/test-loader-relocations.py text eol=lf
+tests/test-multikmi.py text eol=lf
+tests/test_cli.mjs text eol=lf
+tests/test_overlay.mjs text eol=lf
+# END SAMSUNG PATCHER 1

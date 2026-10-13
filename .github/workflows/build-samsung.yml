@@ -1,0 +1,207 @@
+name: Build Samsung SUSFS (all 8 KMIs)
+
+'on':
+  workflow_call:
+    inputs:
+      package_module:
+        description: Package the eight rebuilt modules into a KernelSU ZIP
+        type: boolean
+        default: true
+  workflow_dispatch:
+    inputs:
+      package_module:
+        description: Generate KernelSU-flashable ZIP from this run's rebuilt modules
+        type: boolean
+        default: true
+
+permissions:
+  contents: read
+
+concurrency:
+  group: samsung-all8-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        variant:
+          - android12-5.10
+          - android13-5.10
+          - android13-5.15
+          - android14-5.15
+          - android14-6.1
+          - android15-6.6
+          - android16-6.12
+          - android17-6.18
+    env:
+      VARIANT: ${{ matrix.variant }}
+      DDK_IMAGE_TAG: ghcr.io/ylarod/ddk-min:${{ matrix.variant }}-20260828
+      OUTPUT_DIR: artifacts/${{ matrix.variant }}
+    steps:
+      - name: Check out dispatched source commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify the recorded pre-patch source tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p "$OUTPUT_DIR"
+          {
+            if ! git cat-file -e '85ef920ccf27682a2a9089b4676547f691b92828^{commit}' 2>/dev/null; then
+              git fetch --no-tags --depth=1 https://github.com/inforcqb/susfs4ksu-lkm.git \
+                85ef920ccf27682a2a9089b4676547f691b92828
+            fi
+            git cat-file -e '85ef920ccf27682a2a9089b4676547f691b92828^{commit}'
+            test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          } 2>&1 | tee "$OUTPUT_DIR/reference-fetch.log"
+
+      - name: Verify exact source and selected KMI
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-samsung.py source --variant "$VARIANT" --root . --out "$OUTPUT_DIR" \
+            2>&1 | tee "$OUTPUT_DIR/source-check.log"
+
+      - name: Resolve and record the selected DDK image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker pull "$DDK_IMAGE_TAG" 2>&1 | tee "$OUTPUT_DIR/ddk-pull.log"
+          docker image inspect "$DDK_IMAGE_TAG" > "$OUTPUT_DIR/ddk-image-inspect.json"
+          image_id=$(docker image inspect --format '{{.Id}}' "$DDK_IMAGE_TAG")
+          case "$image_id" in sha256:*) ;; *) exit 1 ;; esac
+          echo "DDK_IMAGE_ID=$image_id" >> "$GITHUB_ENV"
+
+      - name: Build and inspect this KMI
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run --rm --privileged --network none \
+            --volume "$GITHUB_WORKSPACE:/workspace" --workdir /workspace \
+            --env VARIANT --env OUTPUT_DIR --env DDK_IMAGE_TAG --env DDK_IMAGE_ID \
+            --env GITHUB_SHA --env GITHUB_REPOSITORY --env GITHUB_RUN_ID --env GITHUB_RUN_ATTEMPT \
+            --entrypoint /bin/bash "$DDK_IMAGE_ID" tools/build-samsung.sh \
+            2>&1 | tee "$OUTPUT_DIR/container.log"
+
+      - name: Retain per-KMI binary and evidence even on failure
+        if: ${{ always() }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: susfs-evidence-${{ matrix.variant }}-${{ github.sha }}
+          overwrite: true
+          path: artifacts/${{ matrix.variant }}/
+          if-no-files-found: warn
+          retention-days: 14
+
+  collect:
+    needs: build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out the same source commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Download this run's eight build artifacts
+        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          pattern: susfs-evidence-*-${{ github.sha }}
+          path: artifacts/downloaded
+          merge-multiple: false
+
+      - name: Require eight matching rebuilt modules
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-samsung.py collect --artifacts artifacts/downloaded \
+            --out artifacts/combined --expected-commit "$GITHUB_SHA"
+
+      - name: Upload all eight standalone modules
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: susfs-samsung-all8-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/combined/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Install the pinned Android NDK for optional packaging
+        if: ${{ inputs.package_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          SDK_ROOT="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-/usr/local/lib/android/sdk}}"
+          NDK="$SDK_ROOT/ndk/27.3.13750724"
+          mkdir -p artifacts/ksu-build
+          if [ ! -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang" ]; then
+            "$SDK_ROOT/cmdline-tools/latest/bin/sdkmanager" --install 'ndk;27.3.13750724' \
+              2>&1 | tee artifacts/ksu-build/ndk-install.log
+          fi
+          test -x "$NDK/toolchains/llvm/prebuilt/linux-x86_64/bin/clang"
+          echo "SAMSUNG_NDK=$NDK" >> "$GITHUB_ENV"
+
+      - name: Compile reviewed loader and wrapper probe
+        if: ${{ inputs.package_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          BIN="$SAMSUNG_NDK/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          {
+            set -x
+            cat "$SAMSUNG_NDK/source.properties"
+            "$BIN/clang" --version
+            "$BIN/clang" --target=aarch64-linux-gnu -O2 -nostdlib -static-pie \
+              -fno-stack-protector -fno-builtin -fuse-ld=lld -Wl,-e,_start \
+              -Wl,-z,max-page-size=16384 -o artifacts/ksu-build/susfs_insmod tools/susfs_insmod.c
+            "$BIN/aarch64-linux-android28-clang" -O2 -Wall -Wextra -Werror -fPIE -pie \
+              -Wl,-z,max-page-size=16384 -o artifacts/ksu-build/susfs_probe tools/susfs_probe.c
+            "$BIN/llvm-readelf" --file-header artifacts/ksu-build/susfs_insmod artifacts/ksu-build/susfs_probe
+          } 2>&1 | tee artifacts/ksu-build/userspace-build.log
+
+      - name: Reject unsupported runtime relocations in the loader
+        if: ${{ inputs.package_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/verify-freestanding-loader.py artifacts/ksu-build/susfs_insmod \
+            2>&1 | tee artifacts/ksu-build/loader-elf-check.log
+
+      - name: Package only this run's rebuilt modules into KernelSU ZIP
+        if: ${{ inputs.package_module }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          python3 tools/package-samsung-ksu.py --root . --collection artifacts/combined \
+            --loader artifacts/ksu-build/susfs_insmod --probe artifacts/ksu-build/susfs_probe \
+            --expected-commit "$GITHUB_SHA" --build-info artifacts/ksu-build/userspace-build.log \
+            --out artifacts/ksu \
+            2>&1 | tee artifacts/ksu-build/package.log
+
+      - name: Upload the KernelSU-flashable ZIP
+        if: ${{ inputs.package_module }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: susfs-samsung-kernelsu-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/ksu/
+          if-no-files-found: error
+          retention-days: 14
+
+      - name: Retain optional userspace packaging evidence
+        if: ${{ always() && inputs.package_module }}
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: susfs-samsung-ksu-build-evidence-${{ github.sha }}-${{ github.run_attempt }}
+          path: artifacts/ksu-build/
+          if-no-files-found: warn
+          retention-days: 14

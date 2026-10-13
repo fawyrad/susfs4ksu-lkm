@@ -685,7 +685,8 @@ static void kmsg_read_new(sysarg fd)
 	kbuf[kbuf_len] = 0;
 }
 
-static const char *const kmsg_interesting[] = {
+/* _start has no dynamic linker or self-relocator. Store inline strings. */
+static const char kmsg_interesting[][32] = {
 	"Unknown symbol",
 	"version magic",
 	"does not import it",
