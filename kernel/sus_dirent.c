@@ -84,7 +84,7 @@ static struct file *(*sd_fget)(unsigned int);
 static bool sd_armed;
 
 static bool prefilter = true;
-module_param(prefilter, bool, 0644);
+module_param(prefilter, bool, 0444);
 
 static atomic_t n_sd_calls = ATOMIC_INIT(0);
 static atomic_t n_sd_hidden = ATOMIC_INIT(0);
@@ -205,8 +205,13 @@ __nocfi bool susfs_dirent_prefilter(const struct pt_regs *regs, long *out,
 	struct file *f;
 	long error;
 
-	if (!READ_ONCE(prefilter) || !sd_armed || !sd_iterate_dir || !sd_fget)
+	if (!READ_ONCE(prefilter) || !sd_armed || !sd_iterate_dir || !sd_fget) {
+		if (sus_path_dirent_required()) {
+			*out = -EIO;
+			return true;
+		}
 		return false;
+	}
 
 	atomic_inc(&n_sd_calls);
 	buf.ctx.actor = sd_filldir;
@@ -269,12 +274,16 @@ __nocfi bool susfs_dirent_prefilter(const struct pt_regs *regs, long *out,
 
 int susfs_sus_dirent_init(void)
 {
+	if (!prefilter) {
+		pr_err("sus_dirent: prefilter=0 is unsafe - refusing to load\n");
+		return -EINVAL;
+	}
 	sd_iterate_dir = (void *)find_kernel_symbol_exact("iterate_dir");
 	sd_fget = (void *)find_kernel_symbol_exact("fget");
 	if (!sd_iterate_dir || !sd_fget) {
-		pr_warn("sus_dirent: iterate_dir=%px fget=%px - staying off, the post-hoc filter keeps hiding\n",
+		pr_err("sus_dirent: iterate_dir=%px fget=%px - no safe pre-emission filter, refusing to load\n",
 			(void *)sd_iterate_dir, (void *)sd_fget);
-		return 0;
+		return -ENOSYS;
 	}
 	sd_armed = true;
 	SUSFS_LOGI("sus_dirent: armed, iterate_dir=%px fget=%px\n",

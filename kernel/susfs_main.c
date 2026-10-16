@@ -108,15 +108,13 @@ static struct {
     { "sus_path",	sus_path_init,			sus_path_exit,		true,  false },
     /* After sus_path, because this layer asks sus_path's rule table for every open it
      * post-checks - arming it first would install table entries that answer from a table
-     * nobody has filled in yet.  NOT fatal: a failure here only means open(..., O_PATH) keeps
-     * answering the pre-layer way (which is what the layer exists to fix, not what makes the
-     * module useful), and every entry carries its own reason in the log. */
+     * nobody has filled in yet.  Optional: a failure only disables the O_PATH post-check. */
     { "opath",		susfs_opath_init,		susfs_opath_exit,	false, false },
-    /* After sus_path, whose rule table it asks.  NOT fatal: when it does not arm the
-     * post-hoc filter still hides, it is only detectable while doing so. */
-    { "dirent",		susfs_sus_dirent_init,		susfs_sus_dirent_exit,	false, false },
+    /* After sus_path.  This pre-emission filter is mandatory: a post-hoc user-buffer
+     * scrub can lose a mprotect/uaccess race and expose hidden bytes. */
+    { "dirent",		susfs_sus_dirent_init,		susfs_sus_dirent_exit,	true,  false },
     { "uname",		susfs_uname_init,		susfs_uname_exit,	false, false },
-    { "kstat",		susfs_kstat_init,		susfs_kstat_exit,	false, false },
+    { "kstat",		susfs_kstat_init,		susfs_kstat_exit,	true,  false },
     { "sus_map",	susfs_sus_map_init,		susfs_sus_map_exit,	false, false },
     { "sus_mount",	susfs_sus_mount_init,		susfs_sus_mount_exit,	false, false },
     { "cmdline",	susfs_spoof_cmdline_init,	susfs_spoof_cmdline_exit, false, false },
@@ -206,6 +204,15 @@ static int __init susfs_init(void)
     /* Registered last and undone implicitly: these are entries in sus_path's table, which
      * sus_path_exit() empties while its LSM layer still answers ENOENT for the nodes. */
     susfs_self_hide_nodes();
+
+    /* A live i_op wrapper points at this module's text.  Complete the lifetime state only
+     * after every init path has succeeded; a failed init uses the temporary load reference
+     * and the normal rollback to restore its partial entries before the module is freed. */
+    if (sus_path_iop_load_complete()) {
+        pr_err("susfs_guard_lkm: cannot pin live readlink wrappers, refusing to load\n");
+        susfs_layers_down((int)ARRAY_SIZE(susfs_layers) - 1);
+        return -ENODEV;
+    }
 
     /* Operator note.  The module hides its own traces from EVERY caller, root included (a
      * built-in SUSFS has no module entry, so hiding it only from non-root would leave a

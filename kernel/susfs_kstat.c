@@ -1655,11 +1655,9 @@ static susfs_syscall_fn_t kstat_orig_compat_getdents;
 SUSFS_KSTAT_WRAPPER(kstat_wrap_nfstatat, kstat_orig_nfstatat, __NR_newfstatat, false)
 SUSFS_KSTAT_WRAPPER(kstat_wrap_fstat, kstat_orig_fstat, __NR_fstat, false)
 SUSFS_KSTAT_WRAPPER(kstat_wrap_statx, kstat_orig_statx, __NR_statx, false)
-/* getdents64 does NOT use the shared macro: sus_dirent.c can answer it without the original
- * ever writing to the caller's buffer, which is what removes the two tells the post-hoc
- * filter leaves (the d_ino = 0 placeholder, and the scrub that can be faulted).  When that
- * layer declines - unresolved symbol, prefilter=0 - this falls back to exactly what the
- * macro does, so hiding continues either way. */
+/* getdents64 does NOT use the shared macro: sus_dirent.c answers it without the original
+ * ever writing to the caller's buffer.  The module refuses to load if that pre-emission
+ * path is unavailable, so this wrapper cannot fall back to a raceable post-hoc scrub. */
 static __nocfi long kstat_wrap_getdents64(const struct pt_regs *regs)
 {
 	susfs_syscall_fn_t orig = READ_ONCE(kstat_orig_getdents64);
@@ -2099,6 +2097,7 @@ static const struct proc_ops kstat_proc_ops = {
 };
 
 static struct proc_dir_entry *kstat_proc_entry;
+void susfs_kstat_exit(void);
 
 /* How many of kstat_hooks[] are actually in place: this layer's armed state, and what its log line
  * reports.  The entry tail that used to be registered here is gone - the entries' comment
@@ -2135,6 +2134,16 @@ int susfs_kstat_init(void)
 		pr_warn("kstat: none of the %u entries could be installed - the stat family and the dirent rewrite stay off\n",
 			(unsigned int)ARRAY_SIZE(kstat_hooks));
 		return -ENOENT;
+	}
+	/* SUS_PATH's directory filter is safe only when every ABI that this build
+	 * exposes reaches the pre-emission wrapper.  A missing getdents entry would
+	 * silently fall back to the vulnerable post-hoc path. */
+	if (!kstat_hooks[3].installed ||
+	    (IS_ENABLED(CONFIG_COMPAT) &&
+	     (!kstat_hooks[12].installed || !kstat_hooks[13].installed))) {
+		pr_err("kstat: required getdents hook is missing - refusing partial directory coverage\n");
+		susfs_kstat_exit();
+		return -ENOSYS;
 	}
 	if (kstat_hooks_armed < (int)ARRAY_SIZE(kstat_hooks))
 		pr_warn("kstat: %d of %u entries installed (the log above names the rest)\n",

@@ -69,6 +69,7 @@ int sus_path_dirent_layout_id(long syscall_nr, bool compat);
 long sus_path_dirent_filter(int lay_id, unsigned long buf, long ret);
 /* Pre-emission dirent filter (sus_dirent.c): a hidden name is never written to the caller. */
 bool sus_path_dirent_hidden(u64 ino, const char *name);
+bool sus_path_dirent_required(void);
 __nocfi bool susfs_dirent_prefilter(const struct pt_regs *regs, long *out,
 					bool compat);
 int susfs_sus_dirent_init(void);
@@ -117,6 +118,7 @@ void susfs_sus_map_exit(void);
 
 int sus_path_init(void);
 void sus_path_exit(void);
+int sus_path_iop_load_complete(void);
 
 int susfs_sus_mount_init(void);
 void susfs_sus_mount_exit(void);

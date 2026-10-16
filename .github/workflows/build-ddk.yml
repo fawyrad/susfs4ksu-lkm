@@ -119,7 +119,7 @@ jobs:
 
           # Exactly the hooks this module installs (kernel/sus_path.c).  A missing one is a hard error: the module would
           # not compile against this tree, and a silently dropped hook would read as coverage in the counters.
-          HOOKS="inode_permission inode_getattr inode_unlink inode_rmdir inode_rename \
+          HOOKS="inode_permission inode_getattr inode_readlink inode_unlink inode_rmdir inode_rename \
                  inode_link sb_statfs inode_setattr inode_getxattr inode_listxattr \
                  inode_setxattr inode_removexattr path_notify"
           n=0
@@ -510,6 +510,20 @@ jobs:
               hardmiss=$((hardmiss + 1))
             fi
           done
+          # The directory layer now fails closed: iterate_dir and fget are required for the
+          # pre-emission getdents path.  Without either, the old post-hoc uaccess scrub would
+          # reintroduce the mprotect race leak.
+          for s in iterate_dir fget; do
+            n=$(sym_count "$s"); printf '  %-34s %s\n' "$s" "$n"
+            if [ "$n" = "0" ]; then
+              echo "::error::$s is not in $S (variant $V): no race-free directory filter can arm"
+              hardmiss=$((hardmiss + 1))
+            fi
+          done
+          if [ "$hardmiss" -ne 0 ]; then
+            echo "::error::$hardmiss required by-name symbols are missing (variant $V)"
+            exit 1
+          fi
           # --- reported: everything else the module resolves by name.  A 0 means the feature that
           #     needs it degrades on this variant (the module logs which one at load).
           #
