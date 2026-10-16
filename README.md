@@ -29,6 +29,9 @@ rmmod susfs_guard_lkm
 当 SUS_PATH 有任何 readlink wrapper（包括 expose_proc 创建的控制节点）时，模块会暂时保持一个 module reference，
 `rmmod` 会返回 busy；删除这些规则后才允许卸载。这是为了避免 inode 的 `i_op` 仍指向已释放的模块代码。
 
+规则会遮蔽注册对象、注册路径自身的 final symlink，以及通过路径解析到该对象的访问。未注册的任意 symlink alias
+无法由现有 GKI 的 `inode_readlink` hook 得到其解析目标；需要修改 GKI `do_readlinkat()` 才能提供完整 alias 语义。
+
 ## 作为 KernelSU 模块刷入
 
 想免去手动选 `.ko`，每个 release 还附带打包好的模块 `susfs_guard_lkm-module-<tag>-arm64.zip`：在 KernelSU 管理器里刷入、重启即可。模块会按设备内核（`/proc/sys/kernel/osrelease`）自动选择并加载对应的 `.ko`（带 `expose_proc=1`），只负责加载、不设任何 susfs 规则；若系统已存在 susfs 则跳过。仅 arm64、仅 KernelSU 系管理器。`expose_proc=1` 会建立 `/proc/susfs_*` 控制节点，sus 规则通过这些节点下发。要移除：在管理器里停用或删除本模块（重启后生效），或 `rmmod susfs_guard_lkm` 当场卸载。
