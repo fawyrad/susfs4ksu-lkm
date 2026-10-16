@@ -116,7 +116,8 @@ struct sus_path_entry {
      * the same inode, so the binding is reference-counted and the last rule restores it. */
     struct sus_path_iop_binding *iop_binding;
     /* When the registered name itself is a final symlink, keep that dentry's inode too.
-     * LOOKUP_FOLLOW below still supplies the target for normal hiding; this second identity
+     * the zero-flag kern_path below supplies the no-follow dentry; the followed lookup
+     * still supplies the target for normal hiding; this second identity
      * closes lstat/readlink/O_NOFOLLOW on the exact registered spelling. */
     struct inode *link_inode;
     u64 link_dev;
@@ -652,7 +653,7 @@ static int sus_path_resolve_pending(void)
         rc = kern_path(path, LOOKUP_FOLLOW, &p);
         have_path = !rc;
         if (!rc) {
-            int link_rc = kern_path(path, LOOKUP_NOFOLLOW, &link_path);
+            int link_rc = kern_path(path, 0, &link_path);
 
             have_link_path = !link_rc;
             if (!link_rc && d_is_symlink(link_path.dentry)) {
@@ -1385,7 +1386,7 @@ static int sus_path_inode_readlink_lsm(struct dentry *dentry)
  *
  * Registration resolves with LOOKUP_FOLLOW, so this closes readlink for the registered
  * object and for paths that resolve to that object.  The registration path also records
- * its exact final symlink dentry through LOOKUP_NOFOLLOW.  Arbitrary aliases that were
+ * its exact final symlink dentry through a zero-flag kern_path lookup.  Arbitrary aliases that were
  * not registered cannot be mapped back to the target by inode_readlink alone; complete
  * alias coverage requires a kernel-side do_readlinkat hook that resolves the target before
  * vfs_readlink, and is deliberately not faked with a hot-path kretprobe.
@@ -2726,7 +2727,7 @@ static int sus_path_add_hidden_ex(const char *path, bool self_protect)
     e->inode = inode;
     e->self_protect = self_protect;
     ihold(inode);
-    rc = kern_path(path, LOOKUP_NOFOLLOW, &link_path);
+    rc = kern_path(path, 0, &link_path);
     have_link_path = !rc;
     if (!rc && d_is_symlink(link_path.dentry)) {
         link_inode = d_inode(link_path.dentry);
@@ -3082,7 +3083,7 @@ void sus_path_supercall(unsigned int cmd, void __user **arg)
         e->inode = inode;
         ihold(inode);
         {
-            int link_rc = kern_path(info.target_pathname, LOOKUP_NOFOLLOW, &link_path);
+            int link_rc = kern_path(info.target_pathname, 0, &link_path);
 
             have_link_path = !link_rc;
             if (!link_rc && d_is_symlink(link_path.dentry)) {
